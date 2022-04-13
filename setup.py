@@ -48,7 +48,7 @@ setup(
         "sendgrid>=6.4.8,<6.5.0",
         "dnspython~=2.1",
         "requests==2.22.0",
-        "kubernetes~=12.0",
+        "kubernetes>=12,<24",
         "openshift>=0.11.2",
         "websocket-client<0.55.0,>=0.35",
         "sshtunnel>=0.4.0",
