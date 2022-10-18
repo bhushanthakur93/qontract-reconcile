@@ -1,23 +1,26 @@
 import logging
 import os
+import time
 from typing import Any, Optional, Tuple
 
 from operator import itemgetter, attrgetter
 from urllib.parse import urlparse
+
+import requests
+from gitlab import GitlabHttpError, GitlabAuthenticationError
 from sretoolbox.utils import retry
 
 import gitlab
 from gitlab.v4.objects import ProjectMergeRequest, CurrentUser
+from gitlab import utils
 import urllib3
 
-
 from reconcile.utils.secret_reader import SecretReader
-from reconcile.utils.metrics import gitlab_request
+from reconcile.utils.metrics import gitlab_request, better_gitlab_request, gitlab_api_call_duration
 
 # The following line will suppress
 # `InsecureRequestWarning: Unverified HTTPS request is being made`
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
 
 MR_DESCRIPTION_COMMENT_ID = 0
 
@@ -51,17 +54,157 @@ class MRStatus:
     CANNOT_BE_MERGED_RECHECK = "cannot_be_merged_recheck"
 
 
+class InstrumentedGitlab(gitlab.Gitlab):
+
+    def http_request(
+            self,
+            verb,
+            path,
+            query_data=None,
+            post_data=None,
+            streamed=False,
+            files=None,
+            **kwargs
+    ):
+        """Make an HTTP request to the Gitlab server.
+
+        Args:
+            verb (str): The HTTP method to call ('get', 'post', 'put',
+                        'delete')
+            path (str): Path or full URL to query ('/projects' or
+                        'http://whatever/v4/api/projecs')
+            query_data (dict): Data to send as query parameters
+            post_data (dict): Data to send in the body (will be converted to
+                              json)
+            streamed (bool): Whether the data should be streamed
+            files (dict): The files to send to the server
+            **kwargs: Extra options to send to the server (e.g. sudo)
+
+        Returns:
+            A requests result object.
+
+        Raises:
+            GitlabHttpError: When the return code is not 2xx
+        """
+        query_data = query_data or {}
+        url = self._build_url(path)
+
+        params = {}
+        utils.copy_dict(params, query_data)
+
+        # Deal with kwargs: by default a user uses kwargs to send data to the
+        # gitlab server, but this generates problems (python keyword conflicts
+        # and python-gitlab/gitlab conflicts).
+        # So we provide a `query_parameters` key: if it's there we use its dict
+        # value as arguments for the gitlab server, and ignore the other
+        # arguments, except pagination ones (per_page and page)
+        if "query_parameters" in kwargs:
+            utils.copy_dict(params, kwargs["query_parameters"])
+            for arg in ("per_page", "page"):
+                if arg in kwargs:
+                    params[arg] = kwargs[arg]
+        else:
+            utils.copy_dict(params, kwargs)
+
+        opts = self._get_session_opts(content_type="application/json")
+
+        verify = opts.pop("verify")
+        timeout = opts.pop("timeout")
+
+        # We need to deal with json vs. data when uploading files
+        if files:
+            data = post_data
+            json = None
+            del opts["headers"]["Content-type"]
+        else:
+            json = post_data
+            data = None
+
+        # Requests assumes that `.` should not be encoded as %2E and will make
+        # changes to urls using this encoding. Using a prepped request we can
+        # get the desired behavior.
+        # The Requests behavior is right but it seems that web servers don't
+        # always agree with this decision (this is the case with a default
+        # gitlab installation)
+        req = requests.Request(
+            verb, url, json=json, data=data, params=params, files=files, **opts
+        )
+        prepped = self.session.prepare_request(req)
+        prepped.url = utils.sanitized_url(prepped.url)
+        settings = self.session.merge_environment_settings(
+            prepped.url, {}, streamed, verify, None
+        )
+
+        # obey the rate limit by default
+        obey_rate_limit = kwargs.get("obey_rate_limit", True)
+
+        # set max_retries to 10 by default, disable by setting it to -1
+        max_retries = kwargs.get("max_retries", 10)
+        cur_retries = 0
+
+        # Set labels...
+        labels = {
+            "integration": INTEGRATION_NAME,
+            "method": verb,
+            "path": path
+        }
+        while True:
+            start_time = time.time()
+            result = self.session.send(prepped, timeout=timeout, **settings)
+            end_time = time.time() - start_time
+
+            # skip exception for now
+            self._check_redirects(result)
+            labels["status_code"] = result.status_code
+
+            better_gitlab_request.labels(**labels).inc()
+            gitlab_api_call_duration.labels(**labels).set(end_time)
+            if 200 <= result.status_code < 300:
+                return result
+
+            if 429 == result.status_code and obey_rate_limit:
+                if max_retries == -1 or cur_retries < max_retries:
+                    wait_time = 2 ** cur_retries * 0.1
+                    if "Retry-After" in result.headers:
+                        wait_time = int(result.headers["Retry-After"])
+                    cur_retries += 1
+                    time.sleep(wait_time)
+                    continue
+
+            error_message = result.content
+            try:
+                error_json = result.json()
+                for k in ("message", "error"):
+                    if k in error_json:
+                        error_message = error_json[k]
+            except (KeyError, ValueError, TypeError):
+                pass
+
+            if result.status_code == 401:
+                raise GitlabAuthenticationError(
+                    response_code=result.status_code,
+                    error_message=error_message,
+                    response_body=result.content,
+                )
+
+            raise GitlabHttpError(
+                response_code=result.status_code,
+                error_message=error_message,
+                response_body=result.content,
+            )
+
+
 class GitLabApi:  # pylint: disable=too-many-public-methods
     def __init__(
-        self,
-        instance,
-        project_id=None,
-        ssl_verify=True,
-        settings=None,
-        secret_reader=None,
-        project_url=None,
-        saas_files=None,
-        timeout=30,
+            self,
+            instance,
+            project_id=None,
+            ssl_verify=True,
+            settings=None,
+            secret_reader=None,
+            project_url=None,
+            saas_files=None,
+            timeout=30,
     ):
         self.server = instance["url"]
         if not secret_reader:
@@ -148,12 +291,12 @@ class GitLabApi:  # pylint: disable=too-many-public-methods
         self.project.commits.create(data)
 
     def create_mr(
-        self,
-        source_branch,
-        target_branch,
-        title,
-        remove_source_branch=True,
-        labels=None,
+            self,
+            source_branch,
+            target_branch,
+            title,
+            remove_source_branch=True,
+            labels=None,
     ):
         if labels is None:
             labels = []
@@ -344,7 +487,7 @@ class GitLabApi:  # pylint: disable=too-many-public-methods
         return list(changed_paths)
 
     def get_merge_request_comments(
-        self, mr_id: int, include_description: bool = False
+            self, mr_id: int, include_description: bool = False
     ) -> list[dict[str, Any]]:
         comments = []
         gitlab_request.labels(integration=INTEGRATION_NAME).inc()
@@ -546,7 +689,7 @@ class GitLabApi:  # pylint: disable=too-many-public-methods
         self.create_branch("production", "master")
 
     def is_last_action_by_team(
-        self, mr, team_usernames: list[str], hold_labels: list[str]
+            self, mr, team_usernames: list[str], hold_labels: list[str]
     ) -> bool:
         # what is the time of the last app-sre response?
         last_action_by_team = None
@@ -600,7 +743,7 @@ class GitLabApi:  # pylint: disable=too-many-public-methods
         return last_action_not_by_team < last_action_by_team
 
     def is_assigned_by_team(
-        self, mr: ProjectMergeRequest, team_usernames: list[str]
+            self, mr: ProjectMergeRequest, team_usernames: list[str]
     ) -> bool:
         if not mr.assignee:
             return False
@@ -629,7 +772,7 @@ class GitLabApi:  # pylint: disable=too-many-public-methods
         return None
 
     def last_comment(
-        self, mr: ProjectMergeRequest, exclude_bot=True
+            self, mr: ProjectMergeRequest, exclude_bot=True
     ) -> Optional[dict[str, Any]]:
         comments = self.get_merge_request_comments(mr.iid)
         comments.sort(key=itemgetter("created_at"), reverse=True)

@@ -61,3 +61,15 @@ gitlab_request = Counter(
     documentation="Number of calls made to Gitlab API",
     labelnames=["integration"],
 )
+
+better_gitlab_request = Counter(
+    name="qontract_reconcile_better_gitlab_request_total",
+    documentation="Number of calls made to Gitlab API",
+    labelnames=["integration", "method", "path", "status_code"],
+)
+
+gitlab_api_call_duration = Gauge(
+    name="qontract_reconcile_gitlab_api_call_duration_seconds",
+    documentation="Gitlab call duration duration in seconds",
+    labelnames=["integration", "method", "path", "status_code"],
+)
