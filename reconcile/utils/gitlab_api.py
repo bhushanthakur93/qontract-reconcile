@@ -91,7 +91,7 @@ class GitLabApi:  # pylint: disable=too-many-public-methods
         if ssl_verify is None:
             ssl_verify = True
         self.gl = gitlab.Gitlab(
-            self.server, private_token=token, ssl_verify=ssl_verify, timeout=timeout
+            self.server, private_token=token, ssl_verify=ssl_verify, timeout=timeout, session=InstrumentedSession()
         )
         self._auth()
         self.user: CurrentUser = self.gl.user
