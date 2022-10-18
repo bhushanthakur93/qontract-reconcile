@@ -14,7 +14,11 @@ from gitlab.v4.objects import ProjectMergeRequest, CurrentUser
 import urllib3
 
 from reconcile.utils.secret_reader import SecretReader
-from reconcile.utils.metrics import gitlab_request, better_gitlab_request, gitlab_api_call_duration
+from reconcile.utils.metrics import (
+    gitlab_request,
+    better_gitlab_request,
+    gitlab_api_call_duration,
+)
 
 # The following line will suppress
 # `InsecureRequestWarning: Unverified HTTPS request is being made`
@@ -53,12 +57,11 @@ class MRStatus:
 
 
 class InstrumentedSession(Session):
-
     def send(self, request, **kwargs):
         labels = {
             "integration": INTEGRATION_NAME,
             "method": request.method,
-            "url": request.url
+            "url": request.url,
         }
 
         start_time = time.time()
@@ -73,15 +76,15 @@ class InstrumentedSession(Session):
 
 class GitLabApi:  # pylint: disable=too-many-public-methods
     def __init__(
-            self,
-            instance,
-            project_id=None,
-            ssl_verify=True,
-            settings=None,
-            secret_reader=None,
-            project_url=None,
-            saas_files=None,
-            timeout=30,
+        self,
+        instance,
+        project_id=None,
+        ssl_verify=True,
+        settings=None,
+        secret_reader=None,
+        project_url=None,
+        saas_files=None,
+        timeout=30,
     ):
         self.server = instance["url"]
         if not secret_reader:
@@ -91,7 +94,11 @@ class GitLabApi:  # pylint: disable=too-many-public-methods
         if ssl_verify is None:
             ssl_verify = True
         self.gl = gitlab.Gitlab(
-            self.server, private_token=token, ssl_verify=ssl_verify, timeout=timeout, session=InstrumentedSession()
+            self.server,
+            private_token=token,
+            ssl_verify=ssl_verify,
+            timeout=timeout,
+            session=InstrumentedSession(),
         )
         self._auth()
         self.user: CurrentUser = self.gl.user
@@ -168,12 +175,12 @@ class GitLabApi:  # pylint: disable=too-many-public-methods
         self.project.commits.create(data)
 
     def create_mr(
-            self,
-            source_branch,
-            target_branch,
-            title,
-            remove_source_branch=True,
-            labels=None,
+        self,
+        source_branch,
+        target_branch,
+        title,
+        remove_source_branch=True,
+        labels=None,
     ):
         if labels is None:
             labels = []
@@ -364,7 +371,7 @@ class GitLabApi:  # pylint: disable=too-many-public-methods
         return list(changed_paths)
 
     def get_merge_request_comments(
-            self, mr_id: int, include_description: bool = False
+        self, mr_id: int, include_description: bool = False
     ) -> list[dict[str, Any]]:
         comments = []
         gitlab_request.labels(integration=INTEGRATION_NAME).inc()
@@ -566,7 +573,7 @@ class GitLabApi:  # pylint: disable=too-many-public-methods
         self.create_branch("production", "master")
 
     def is_last_action_by_team(
-            self, mr, team_usernames: list[str], hold_labels: list[str]
+        self, mr, team_usernames: list[str], hold_labels: list[str]
     ) -> bool:
         # what is the time of the last app-sre response?
         last_action_by_team = None
@@ -620,7 +627,7 @@ class GitLabApi:  # pylint: disable=too-many-public-methods
         return last_action_not_by_team < last_action_by_team
 
     def is_assigned_by_team(
-            self, mr: ProjectMergeRequest, team_usernames: list[str]
+        self, mr: ProjectMergeRequest, team_usernames: list[str]
     ) -> bool:
         if not mr.assignee:
             return False
@@ -649,7 +656,7 @@ class GitLabApi:  # pylint: disable=too-many-public-methods
         return None
 
     def last_comment(
-            self, mr: ProjectMergeRequest, exclude_bot=True
+        self, mr: ProjectMergeRequest, exclude_bot=True
     ) -> Optional[dict[str, Any]]:
         comments = self.get_merge_request_comments(mr.iid)
         comments.sort(key=itemgetter("created_at"), reverse=True)
