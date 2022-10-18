@@ -71,5 +71,5 @@ better_gitlab_request = Counter(
 gitlab_api_call_duration = Gauge(
     name="qontract_reconcile_gitlab_api_call_duration_seconds",
     documentation="Gitlab call duration duration in seconds",
-    labelnames=["integration", "shards", "shard_id"],
+    labelnames=["integration", "method", "path", "status_code"],
 )
