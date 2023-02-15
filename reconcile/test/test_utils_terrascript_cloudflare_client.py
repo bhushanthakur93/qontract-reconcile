@@ -13,7 +13,6 @@ from reconcile.utils.terraform.config import TerraformS3BackendConfig
 from reconcile.utils.terrascript.cloudflare_client import (
     AccountShardingStrategy,
     CloudflareAccountConfig,
-    IntegrationUndefined,
     TerrascriptCloudflareClient,
     TerrascriptCloudflareClientFactory,
     create_cloudflare_terrascript,
@@ -322,7 +321,7 @@ def terraform_state_s3():
         "automation_token_path",
         "app-interface",
         "us-east-1",
-        [Integration(INTEGRATION.replace("_", "-"), "key")],
+        Integration(INTEGRATION.replace("_", "-"), "key"),
     )
     return tf_state_s3
 
@@ -348,12 +347,11 @@ def test_cloudflare_client_factory_skip_account_resource(
     """
 
     client = TerrascriptCloudflareClientFactory.get_client(
-        INTEGRATION.replace("-", "_"),
         terraform_state_s3,
         cloudflare_account,
         None,
         secret_reader_side_effect_fixture,
-        True,
+        True
     )
 
     output = json.loads(client.dumps())
@@ -372,12 +370,11 @@ def test_cloudflare_client_factory_create_account_resource(
     """
 
     client = TerrascriptCloudflareClientFactory.get_client(
-        INTEGRATION.replace("-", "_"),
         terraform_state_s3,
         cloudflare_account,
         None,
         secret_reader_side_effect_fixture,
-        False,
+        False
     )
 
     output = json.loads(client.dumps())
@@ -420,30 +417,12 @@ def test_cloudflare_client_factory_object_key_strategies(
     """
 
     client = TerrascriptCloudflareClientFactory.get_client(
-        INTEGRATION.replace("-", "_"),
         terraform_state_s3,
         cloudflare_account,
         sharding_strategy,
         secret_reader_side_effect_fixture,
-        False,
+        False
     )
 
     output = json.loads(client.dumps())
     assert expected_key == output["terraform"]["backend"]["s3"]["key"]
-
-
-def test_cloudflare_client_factory_raises_exception_when_integration_undefined_in_state(
-    terraform_state_s3, cloudflare_account, secret_reader_side_effect_fixture
-):
-
-    UNDECLARED_INTEGRATION = "undeclared-integration"
-
-    with pytest.raises(IntegrationUndefined):
-        _ = TerrascriptCloudflareClientFactory.get_client(
-            UNDECLARED_INTEGRATION,
-            terraform_state_s3,
-            cloudflare_account,
-            None,
-            secret_reader_side_effect_fixture,
-            False,
-        )
