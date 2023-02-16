@@ -368,13 +368,13 @@ def test_cloudflare_client_factory_skip_account_resource(
     """
     Tests that cloudflare terrascript resource 'cloudflare_account' is skipped
     """
-
+    is_managed_account = True
     client = TerrascriptCloudflareClientFactory.get_client(
         terraform_state_s3,
         cloudflare_account,
         None,
         secret_reader_fixture,
-        True,
+        is_managed_account,
     )
 
     output = json.loads(client.dumps())
@@ -392,12 +392,13 @@ def test_cloudflare_client_factory_create_account_resource(
     Tests that cloudflare terrascript resource 'cloudflare_account' is created
     """
 
+    is_managed_account = False
     client = TerrascriptCloudflareClientFactory.get_client(
         terraform_state_s3,
         cloudflare_account,
         None,
         secret_reader_fixture,
-        False,
+        is_managed_account,
     )
 
     output = json.loads(client.dumps())
