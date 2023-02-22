@@ -14,6 +14,7 @@ from datetime import (
 from threading import Lock
 from typing import (
     Any,
+    Callable,
     Optional,
     cast,
 )
@@ -32,6 +33,7 @@ from sretoolbox.utils import (
 import reconcile.utils.lean_terraform_client as lean_tf
 from reconcile.utils.aws_api import AWSApi
 from reconcile.utils.aws_helper import get_region_from_availability_zone
+from reconcile.utils.defer import defer
 from reconcile.utils.external_resource_spec import (
     ExternalResourceSpec,
     ExternalResourceSpecInventory,
@@ -683,3 +685,57 @@ class TerraformClient:  # pylint: disable=too-many-public-methods
             return not set(changed_resource_arguments) - set(changed_values)
         else:
             return False
+
+
+@defer
+def run_terraform(
+    QONTRACT_INTEGRATION: str,
+    QONTRACT_INTEGRATION_VERSION: str,
+    QONTRACT_TF_PREFIX: str,
+    dry_run: bool,
+    enable_deletion: bool,
+    thread_pool_size: int,
+    working_dirs: Mapping[str, str],
+    accounts: Iterable[Mapping[str, Any]],
+    defer=Optional[Callable],
+):
+    tf = TerraformClient(
+        QONTRACT_INTEGRATION,
+        QONTRACT_INTEGRATION_VERSION,
+        QONTRACT_TF_PREFIX,
+        accounts,
+        working_dirs,
+        thread_pool_size,
+    )
+
+    defer(tf.cleanup)
+
+    disabled_deletions_detected, err = tf.plan(enable_deletion)
+    if err:
+        raise TerraformPlanFailed(
+            f"Failed to run terraform plan for integration {QONTRACT_INTEGRATION}"
+        )
+    if disabled_deletions_detected:
+        logging.warning("Deletions detected but they are disabled")
+        raise TerraformDeletionDetected("Deletions detected but they are disabled")
+
+    if dry_run:
+        return
+
+    err = tf.apply()
+    if err:
+        TerraformApplyFailed(
+            f"Failed to run terraform apply for integration {QONTRACT_INTEGRATION}"
+        )
+
+
+class TerraformPlanFailed(Exception):
+    pass
+
+
+class TerraformApplyFailed(Exception):
+    pass
+
+
+class TerraformDeletionDetected(Exception):
+    pass
